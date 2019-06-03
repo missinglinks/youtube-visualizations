@@ -1,0 +1,366 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta http-equiv="Content-Type" content="text/html;charset=utf-8">
+    <title> YouTube User Movement</title>
+    <script type="text/javascript" src="https://cdnjs.cloudflare.com/ajax/libs/d3/5.9.2/d3.js"></script>
+    <style type="text/css">
+      body {
+          margin: 1em;
+          font-family: 'Helvetica', 'Arial', sans-serif;
+      }
+      .link {
+        fill: none;
+        opacity: .08;
+      }
+      .link.on {
+        opacity: .8;
+      }
+      .node {
+        stroke: none;
+      }
+      .tooltip {
+        color: white;
+        position: absolute;
+        text-align: center;
+        padding: 2px;
+        font: 10px sans-serif;
+        background: rgba(0,0,0,.6);
+        pointer-events: none;
+        border-radius: 3px;
+      }
+      .comment-item {
+        color: 'gray';
+        padding: 5px;
+        font-size: 11px;
+      }
+      .video-item{
+        padding: 5px;
+        font-size: 12px;
+        cursor: pointer;
+      }
+      #videos {
+        width: 650px;
+        height: 350px;
+        overflow-y:hidden;
+        position:fixed;
+        left: 520px;
+      }
+      #comments {
+        width: 650px;
+        height: 350px;
+        overflow-y: hidden;
+        position: fixed;
+        left: 1200px;
+      }
+      #provenance {
+        width: 450px;
+        height: 350px;
+        overflow-y: hidden;
+        position: fixed;
+        left: 30px;
+      }      
+      #provenance div {
+        padding: 5px;
+        font-size: 12px;   
+      }
+      h3 {
+        padding: 5px;
+        font-size: 14px;        
+      }
+    </style>
+  </head>
+  <body>
+
+    <div id='svg'></div>
+    <div id='details'>
+
+      <div id='provenance'>
+        <h3>About the visualisation</h3>
+        <div>
+          This visualisation shows the movement of users between YouTube channels.
+          The bars show the number of unique users from other channels posting in this channels for the first time.
+          <br /> * Click on the bars to show the videos users left their first comment. 
+          <br /> * Click on the videos to show the comments.
+        </div>
+        <h3>Data provenance</h3>
+      </div>
+
+      <div id='videos'></div>
+      <div id='comments'></div>
+    </div>
+
+
+    <script type="text/javascript">
+
+const data = JSON.parse(
+  {{ dataset }}
+)
+
+// DATA PREPERATION
+
+const incomingDict = {}
+for (entry of data.incoming) {
+  incomingDict[entry[0]] = entry[1]
+}
+
+// years and months of the dataset
+var months = d3.range(data.years.length*12).map((m) => {
+    var year = data.years[Math.floor(m/12)]
+    var month = m%12+1
+    return ([year, month])
+})
+
+// color definitions
+const colors = ["red", "steelblue", "green", "gray", "lime",  "aqua", "teal"]
+const step = 100
+
+// svg size
+const w = months.length*40
+const h = data.channels.length * step + 100
+
+// scales
+const x = d3.scaleTime()
+  .domain([ new Date(d3.min(data.years), 0, 1), new Date(d3.max(data.years), 0 ,1)])
+  .range([0, w])
+
+const y = d3.scaleOrdinal()
+  .domain(data.channels)
+  .range(d3.range(100, h, step))
+
+const arcWidth = d3.scaleLinear()
+  .domain([0, data.max])
+  .range([0, 20])
+
+const incomingSize = d3.scaleLinear()
+  .domain([1, d3.max(data.incoming.map((i) => i[1]['count']))])
+  .range([4, 60])
+
+// curved line element
+const line = d3.line()
+  .curve(d3.curveBasis)
+
+// prepare svg element and draw background
+const vis = d3.select("#svg")
+  .append("svg")
+    .attr("width", w+300)
+    .attr("height", h)
+
+const bg = vis.selectAll('g.bg')
+  .data(months)
+  .enter().append('rect')
+    .attr('fill', (m) => { return m[1]%2 === 0 ? '#f9f9f9' : 'white' } )
+    .attr('x', (m) => x(d3.isoParse(m[0].toString()+"-"+m[1].toString()+"-1")))
+    .attr('y', 0)
+    .attr('height', h)
+    .attr('width', (m) =>{
+        let mon = m[1] + 1
+        let year = m[0]
+        if (mon === 13) {
+          year++
+          mon = 1
+        }
+        let xValue = x(d3.isoParse(year.toString()+"-"+mon.toString()+"-01"))-x(d3.isoParse(m[0].toString()+"-"+m[1].toString()+"-1"))
+        return xValue
+        })
+
+// prepare tooltip element
+const tooltip = d3.select("body").append('div')
+  .attr('class', 'tooltip')
+  .style('opacity', 0)
+
+
+// draw user movement arcs
+// start and endpoints contain a bit of randomness, to make it a bit more interesting, visually
+const generateArcs = (a) => {
+  const xStart = x(d3.isoParse(a.first[1])) + 5
+  const yStart = y(a.first[0])
+  const xEnd = x(d3.isoParse(a.target[1])) +10 + Math.random()*25
+  const yEnd = y(a.target[0])
+
+  return line([
+    [xStart, yStart],
+    [xStart, yStart-step/2],
+    [xEnd, yStart-step/2],
+    [xEnd, yEnd]
+  ])
+}
+
+// generate classname for arcs: sourceChannel__targetChannel__date__
+// replace all spaces in channel names with '_'
+const arcClass = (a) => {
+  let className = a.first[0]+"__"+a.target[0]+'__'+a.target[1]
+  return className.replace(/ /g, '_').replace(/\./g, '_')
+}
+
+// render the arcs
+const arcs = vis.selectAll('path.arcs')
+  .data(data.arcs)
+  .enter().append('path')
+    .attr('class', (a) => 'link '+arcClass(a) )
+    .style('opacity', 0)
+    .style('stroke-width', (a) => arcWidth(a.value) )
+    .style('stroke', (a) => colors[data.channels.indexOf(a.first[0])])
+    .attr('d', generateArcs)
+
+
+// render monthly incoming user circles
+const std = (id_) => id_.replace(/ /g, '_').replace(/\./g, '_')
+
+const calcCirclePosOffset = (loc) => {
+  const source = loc[0]
+  const target = loc[1]
+  const filtered = data.channels.filter((c) => c !== target ? c : null )
+  return filtered.indexOf(source) * 10 + 5
+}
+let currentIncoming = "a"
+const incomingUsers = vis.selectAll('g.incoming')
+  .data(data.incoming)
+  .enter().append('rect')
+    .attr('id', (i) => 'inc'+std(i[0]))
+    .attr('fill', (i) => colors[data.channels.indexOf(i[0].split('__')[0])])
+    .attr('stroke', 'white')
+    .attr('stroke-width', 1)
+    .attr('height', (i) => incomingSize(i[1]['count']))
+    .attr('width', 10)
+    .style('opacity', 0.4)
+    .attr('x', (i) => {
+      const loc = i[0].split('__')
+      const offset = calcCirclePosOffset(loc)
+      return x(d3.isoParse(loc[2])) + offset
+    })
+    .attr('y', (i) => {
+      const loc = i[0].split('__')
+      return y(loc[1])+6
+    })
+    .on('click', function (i) {
+      showDetails(i[0])
+      // reset prior arcs and incoming user idicators
+      d3.selectAll('.'+currentIncoming)
+        .style('opacity', 0.00)
+        .style('stroke',  (a) => colors[data.channels.indexOf(a.first[0])])
+
+      d3.select('#inc'+currentIncoming)
+        .transition()
+        .style('opacity', 0.4)
+
+      // set new arcs and incoming user indicator
+      d3.selectAll('.'+std(i[0]))
+        .transition()
+        .duration(500)
+        .style('opacity', 0.5)
+        //.style('stroke', 'gray')
+      d3.select(this)
+        .transition()
+        .style('opacity', 0.9)
+      currentIncoming = std(i[0])
+    })
+    .on('mouseover', function (i) {
+      d3.select(this)
+        .transition()
+        .style('opacity', 0.8)
+      tooltip
+        .transition()
+        .duration(100)
+        .style('opacity', 0.9);
+      tooltip
+        .html(i[1].count)
+        .style('left', d3.event.pageX + 'px')
+        .style('top', d3.event.pageY - 28 + 'px');
+    })
+    .on('mouseout', function (i) {
+      if (std(i[0]) !== currentIncoming)
+        d3.select(this).transition()
+            .style('opacity', 0.4)
+      tooltip
+        .transition()
+        .duration(100)
+        .style('opacity', 0);
+    })
+
+// render channel lines and labels
+const channels = vis.selectAll('g.channels')
+  .data(data.channels)
+  .enter().append('g')
+
+var channelLabels = channels.append('text')
+  .style('position', 'fixed')
+  .text((c) => c )
+  .style("font-size", "10px")
+  .attr('x', 0)
+  .attr('y', (c) => y(c)-5)
+
+//channel lines
+var channelLines = channels.append('rect')
+  .attr('fill', (c) => colors[data.channels.indexOf(c)])
+  .attr('x', 0)
+  .attr('y', (c) => y(c)-2)
+  .attr('height', 4)
+  .attr('width', x(d3.isoParse('2020-01-01')))
+
+// render timeline labels
+const yearLabels = vis.selectAll('g.yearLabels')
+  .data(data.years)
+  .enter().append('text')
+    .text((y) => y)
+    .style('font-size', '10px')
+    .attr('x', (y) => 3+x(d3.isoParse(y.toString()+"-1-1")))
+    .attr('y', 12)
+
+const monthLabels = vis.selectAll('g.monthLabels')
+    .data(months)
+    .enter().append('text')
+      .style('fill', 'gray')
+      .text((m) => m[1])
+      .style('font-size', '10px')
+      .attr('x', (m) => 3+x(d3.isoParse(m[0].toString()+"-"+m[1].toString()+"-1")))
+      .attr('y', 25)
+
+
+// display video titles and comments
+const showDetails = (incomingId) => {
+  const ds = incomingDict[incomingId]
+  const header = incomingId.split('__')
+  // reset divs
+  d3.select('#videos').html('')
+    .style('overflow-y', 'scroll')
+  d3.select('#comments').html('')
+    .style('overflow-y', 'hidden')
+  //set new content
+  d3.select('#videos').append('h3')
+    .html(header[0]+' >> '+header[1]+' ('+header[2]+')')
+  const content = d3.select('#videos').append('div')
+  content.selectAll('.videos')
+    .data(ds.videos).enter().append('div')
+      .html((v) => { return v[0]+' ('+v[1].length+')' })
+      .attr('class', 'video-item')
+      .on('click', (v) => {
+        const commentDiv = d3.select('#comments')
+          .style('overflow-y', 'scroll')
+          .html('')
+        commentDiv.selectAll('.comment')
+          .data(v[1]).enter().append('div')
+            .html((c) => c[1]+'<br /><b>'+c[0]+'</b>')
+            .attr('class', 'comment-item')
+      })
+}
+
+const provenance = d3.select('#provenance').append('div')
+provenance.selectAll('.prov_entries')
+  .data(data.provenance).enter()
+  .append('div')
+    .html((d) => 'Channel "' + d.channel + '" retrieved at ' + d.retrieved_at)
+
+provenance
+  .append('div')
+  .html('<br />YouTube data retrieved using <a href="https://github.com/diggr/pyg/">PYG</a>')
+
+// scrolling eventhandler
+document.addEventListener('scroll', function (evt) {
+  channelLabels
+    .attr('x', window.scrollX);
+}, false)
+
+    </script>
+  </body>
+</html>
